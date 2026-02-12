@@ -419,6 +419,7 @@ end
 -- Build the calculation output tables
 function CalcsTabClass:BuildOutput()
 	self.powerBuildFlag = true
+	self.powerAllStatCache = nil  -- Invalidate all-stat power cache on build change
 
 	--[[
 	local start = GetTime()
@@ -450,10 +451,87 @@ function CalcsTabClass:BuildOutput()
 	self.miscCalculator = { self.calcs.getMiscCalculator(self.build) }
 end
 
+-- Apply power values from the all-stat cache for the currently selected stat
+-- This is called both after PowerBuilder completes and on stat switch (instant)
+function CalcsTabClass:ApplyStatPowerFromCache()
+	local asc = self.powerAllStatCache
+	if not asc then return false end
+
+	local allStatPower = asc.allStatPower
+	local allStatMax = asc.allStatMax
+	local selectedStat = self.powerStat and self.powerStat.stat
+	local isCombined = not selectedStat
+
+	-- Build powerMax for the selected stat
+	local newPowerMax = {
+		singleStat = selectedStat and (allStatMax[selectedStat] or 0) or 0,
+		offence = allStatMax.offence or 0,
+		offencePerPoint = allStatMax.offencePerPoint or 0,
+		defence = allStatMax.defence or 0,
+		defencePerPoint = allStatMax.defencePerPoint or 0,
+	}
+
+	-- Apply to tree nodes
+	for nodeId, node in pairs(self.build.spec.nodes) do
+		local powers = allStatPower[nodeId]
+		if powers then
+			if isCombined then
+				node.power.offence = powers.__offence or 0
+				node.power.defence = powers.__defence or 0
+				node.power.singleStat = node.power.offence
+			elseif selectedStat and selectedStat ~= "FullDPS" then
+				node.power.singleStat = powers[selectedStat] or 0
+				node.power.pathPower = powers[selectedStat .. "_path"] or node.power.singleStat
+			end
+		else
+			wipeTable(node.power)
+		end
+	end
+
+	-- Apply to cluster nodes
+	for nodeName, node in pairs(self.build.spec.tree.clusterNodeMap) do
+		local powers = allStatPower["cluster_" .. nodeName]
+		if powers then
+			if isCombined then
+				-- cluster nodes don't use offence/defence in the report
+			elseif selectedStat and selectedStat ~= "FullDPS" then
+				node.power.singleStat = powers[selectedStat] or 0
+			end
+		else
+			if node.power then wipeTable(node.power) end
+		end
+	end
+
+	self.powerMax = newPowerMax
+	self.powerBuilderInitialized = true
+	return true
+end
+
+-- Try to restore power results from the all-stat cache. Returns true if successful.
+function CalcsTabClass:RestorePowerFromCache()
+	if not self.powerAllStatCache then
+		return false
+	end
+	local selectedStat = self.powerStat and self.powerStat.stat
+	-- FullDPS needs a separate computation pass, can't restore from cache
+	if selectedStat == "FullDPS" then
+		return false
+	end
+	return self:ApplyStatPowerFromCache()
+end
+
 -- Controls the coroutine that calculates node power
 function CalcsTabClass:BuildPower()
 	if self.powerBuildFlag then
 		self.powerBuildFlag = false
+		-- Check all-stat cache before starting expensive coroutine
+		if self:RestorePowerFromCache() then
+			self.powerBuilder = nil
+			if self.build.powerBuilderCallback then
+				self.build.powerBuilderCallback()
+			end
+			return
+		end
 		self.powerMax = nil
 		self.powerBuilder = coroutine.create(self.PowerBuilder)
 	end
@@ -471,28 +549,57 @@ function CalcsTabClass:BuildPower()
 	end
 end
 
+-- Build the list of power stats to pre-compute (all except FullDPS which needs separate calcFullDPS pass)
+local function getPowerStatsForCache(data)
+	local statList = { }
+	for _, ps in ipairs(data.powerStatList) do
+		if ps.stat and ps.stat ~= "FullDPS" and not ps.ignoreForNodes then
+			t_insert(statList, ps)
+		end
+	end
+	return statList
+end
+
+-- Compute power for all stats from a single output table
+local function computeAllStatPowers(self, output, calcBase, statList)
+	local powers = { }
+	local anyNonZero = false
+	for _, ps in ipairs(statList) do
+		local power = self:CalculatePowerStat(ps, output, calcBase)
+		powers[ps.stat] = power
+		if power ~= 0 then anyNonZero = true end
+	end
+	-- Also compute combined Offence/Defence
+	powers.__offence, powers.__defence = self:CalculateCombinedOffDefStat(output, calcBase)
+	if powers.__offence ~= 0 or powers.__defence ~= 0 then anyNonZero = true end
+	return powers, anyNonZero
+end
+
 -- Estimate the offensive and defensive power of all unallocated nodes
+-- Computes ALL stats in a single pass for instant stat switching
 function CalcsTabClass:PowerBuilder()
-	--local timer_start = GetTime()
-	local useFullDPS = self.powerStat and self.powerStat.stat == "FullDPS"
 	local calcFunc, calcBase = self:GetMiscCalculator()
 	local cache = { }
+	local pathCache = { }
 	local distanceMap = { }
 	local distanceList = { }
-	local newPowerMax = {
-		singleStat = 0,
-		offence = 0,
-		offencePerPoint = 0,
-		defence = 0,
-		defencePerPoint = 0
-	}
-	if not self.powerMax then
-		self.powerMax = newPowerMax
+	local statList = getPowerStatsForCache(self.build.data)
+
+	local allStatPower = { }
+	local allStatMax = { singleStat = 0, offence = 0, offencePerPoint = 0, defence = 0, defencePerPoint = 0 }
+	for _, ps in ipairs(statList) do
+		allStatMax[ps.stat] = 0
 	end
+
+	-- Set default powerMax so rendering doesn't crash while coroutine runs
+	if not self.powerMax then
+		self.powerMax = { singleStat = 0, offence = 0, offencePerPoint = 0, defence = 0, defencePerPoint = 0 }
+	end
+
 	if coroutine.running() then
 		coroutine.yield()
 	end
-	
+
 	local start = GetTime()
 	for nodeId, node in pairs(self.build.spec.nodes) do
 		wipeTable(node.power)
@@ -514,48 +621,69 @@ function CalcsTabClass:PowerBuilder()
 		for nodeId, node in pairs(nodes) do
 			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
 				if not cache[node.modKey] then
-					cache[node.modKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
+					cache[node.modKey] = calcFunc({ addNodes = { [node] = true } }, false)
 				end
 				local output = cache[node.modKey]
-				if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
-					node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
-					if node.path and not node.ascendancyName then
-						newPowerMax.singleStat = m_max(newPowerMax.singleStat, node.power.singleStat)
-						node.power.pathPower = node.power.singleStat
-						local pathNodes = { }
-						for _, node in pairs(node.path) do
-							pathNodes[node] = true
-						end
-						if node.pathDist > 1 then
-							node.power.pathPower = self:CalculatePowerStat(self.powerStat, calcFunc({ addNodes = pathNodes }, useFullDPS), calcBase)
-						end
+				local powers, anyNonZero = computeAllStatPowers(self, output, calcBase, statList)
+				allStatPower[nodeId] = powers
+
+				if node.path and not node.ascendancyName then
+					for _, ps in ipairs(statList) do
+						allStatMax[ps.stat] = m_max(allStatMax[ps.stat], powers[ps.stat] or 0)
 					end
-				elseif not self.powerStat or not self.powerStat.ignoreForNodes then
-					node.power.offence, node.power.defence = self:CalculateCombinedOffDefStat(output, calcBase)
-					node.power.singleStat = node.power.offence
-					if node.path and not node.ascendancyName then
-						newPowerMax.offence = m_max(newPowerMax.offence, node.power.offence)
-						newPowerMax.defence = m_max(newPowerMax.defence, node.power.defence)
-						newPowerMax.offencePerPoint = m_max(newPowerMax.offencePerPoint, node.power.offence / node.pathDist)
-						newPowerMax.defencePerPoint = m_max(newPowerMax.defencePerPoint, node.power.defence / node.pathDist)
+					allStatMax.offence = m_max(allStatMax.offence, powers.__offence or 0)
+					allStatMax.defence = m_max(allStatMax.defence, powers.__defence or 0)
+					allStatMax.offencePerPoint = m_max(allStatMax.offencePerPoint, (powers.__offence or 0) / node.pathDist)
+					allStatMax.defencePerPoint = m_max(allStatMax.defencePerPoint, (powers.__defence or 0) / node.pathDist)
+				end
+
+				-- Path calc: compute if ANY stat has non-zero power
+				if node.path and not node.ascendancyName and node.pathDist > 1 and anyNonZero then
+					local pathNodes = { }
+					for _, pn in pairs(node.path) do
+						pathNodes[pn] = true
+					end
+					local pathModKeys = { }
+					for pathNode in pairs(pathNodes) do
+						t_insert(pathModKeys, pathNode.modKey)
+					end
+					table.sort(pathModKeys)
+					local pathKey = "add:" .. table.concat(pathModKeys, "|")
+					if not pathCache[pathKey] then
+						pathCache[pathKey] = calcFunc({ addNodes = pathNodes }, false)
+					end
+					local pathOutput = pathCache[pathKey]
+					for _, ps in ipairs(statList) do
+						powers[ps.stat .. "_path"] = self:CalculatePowerStat(ps, pathOutput, calcBase)
 					end
 				end
+
 			elseif node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
 				if not cache[node.modKey.."_remove"] then
-					cache[node.modKey.."_remove"] = calcFunc({ removeNodes = { [node] = true } }, useFullDPS)
+					cache[node.modKey.."_remove"] = calcFunc({ removeNodes = { [node] = true } }, false)
 				end
 				local output = cache[node.modKey.."_remove"]
-				if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
-					node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
-					if node.depends and not node.ascendancyName then
-						node.power.pathPower = node.power.singleStat
-						local pathNodes = { }
-						for _, node in pairs(node.depends) do
-							pathNodes[node] = true
-						end
-						if #node.depends > 1 then
-							node.power.pathPower = self:CalculatePowerStat(self.powerStat, calcFunc({ removeNodes = pathNodes }, useFullDPS), calcBase)
-						end
+				local powers, anyNonZero = computeAllStatPowers(self, output, calcBase, statList)
+				allStatPower[nodeId] = powers
+
+				-- Path calc for allocated nodes (remove path)
+				if node.depends and not node.ascendancyName and #node.depends > 1 and anyNonZero then
+					local pathNodes = { }
+					for _, pn in pairs(node.depends) do
+						pathNodes[pn] = true
+					end
+					local pathModKeys = { }
+					for pathNode in pairs(pathNodes) do
+						t_insert(pathModKeys, pathNode.modKey)
+					end
+					table.sort(pathModKeys)
+					local pathKey = "rem:" .. table.concat(pathModKeys, "|")
+					if not pathCache[pathKey] then
+						pathCache[pathKey] = calcFunc({ removeNodes = pathNodes }, false)
+					end
+					local pathOutput = pathCache[pathKey]
+					for _, ps in ipairs(statList) do
+						powers[ps.stat .. "_path"] = self:CalculatePowerStat(ps, pathOutput, calcBase)
 					end
 				end
 			end
@@ -566,8 +694,7 @@ function CalcsTabClass:PowerBuilder()
 		end
 	end
 
-	-- Calculate the impact of every cluster notable
-	-- used for the power report screen
+	-- Calculate the impact of every cluster notable (for the power report)
 	for nodeName, node in pairs(self.build.spec.tree.clusterNodeMap) do
 		if not node.power then
 			node.power = {}
@@ -575,21 +702,27 @@ function CalcsTabClass:PowerBuilder()
 		wipeTable(node.power)
 		if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] then
 			if not cache[node.modKey] then
-				cache[node.modKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
+				cache[node.modKey] = calcFunc({ addNodes = { [node] = true } }, false)
 			end
 			local output = cache[node.modKey]
-			if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
-				node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
-			end
+			local powers = computeAllStatPowers(self, output, calcBase, statList)
+			allStatPower["cluster_" .. nodeName] = powers
 		end
 		if coroutine.running() and GetTime() - start > 100 then
 			coroutine.yield()
 			start = GetTime()
 		end
 	end
-	self.powerMax = newPowerMax
+
+	-- Save comprehensive all-stat cache
+	self.powerAllStatCache = {
+		allStatPower = allStatPower,
+		allStatMax = allStatMax,
+	}
+
+	-- Apply selected stat's power to nodes for immediate display
+	self:ApplyStatPowerFromCache()
 	self.powerBuilderInitialized = true
-	--ConPrintf("Power Build time: %d ms", GetTime() - timer_start)
 end
 
 function CalcsTabClass:CalculatePowerStat(selection, original, modified)

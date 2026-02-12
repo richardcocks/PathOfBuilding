@@ -1062,7 +1062,7 @@ end
 -- 8. Processes buffs and debuffs
 -- 9. Processes charges and misc buffs (doActorCharges, doActorMisc)
 -- 10. Calculates defence and offence stats (calcs.defence, calcs.offence)
-function calcs.perform(env, skipEHP)
+function calcs.perform(env, skipEHP, skipOffence)
 	local modDB = env.modDB
 	local enemyDB = env.enemyDB
 
@@ -3401,9 +3401,11 @@ function calcs.perform(env, skipEHP)
 		calcs.buildDefenceEstimations(env, env.player)
 	end
 
-	calcs.triggers(env, env.player)
-	if not calcs.mirages(env) then
-		calcs.offence(env, env.player, env.player.mainSkill)
+	if not skipOffence then
+		calcs.triggers(env, env.player)
+		if not calcs.mirages(env) then
+			calcs.offence(env, env.player, env.player.mainSkill)
+		end
 	end
 
 	if env.minion then
@@ -3411,8 +3413,10 @@ function calcs.perform(env, skipEHP)
 		if not skipEHP then -- main.build.calcsTab.input.showMinion and -- should be disabled unless "calcsTab.input.showMinion" is true
 			calcs.buildDefenceEstimations(env, env.minion)
 		end
-		calcs.triggers(env, env.minion)
-		calcs.offence(env, env.minion, env.minion.mainSkill)
+		if not skipOffence then
+			calcs.triggers(env, env.minion)
+			calcs.offence(env, env.minion, env.minion.mainSkill)
+		end
 	end
 
 	 -- Export modifiers to enemy conditions and stats for party tab

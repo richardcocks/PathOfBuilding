@@ -189,6 +189,13 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 				(y - offsetY) / scale
 	end
 
+	-- Viewport culling bounds (generous margin for node sprites)
+	local cullMargin = 150 * scale
+	local vpLeft = viewPort.x - cullMargin
+	local vpRight = viewPort.x + viewPort.width + cullMargin
+	local vpTop = viewPort.y - cullMargin
+	local vpBottom = viewPort.y + viewPort.height + cullMargin
+
 	if IsKeyDown("SHIFT") then
 		-- Enable path tracing mode
 		self.traceMode = true
@@ -458,6 +465,13 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 
 	local function renderGroup(group, isExpansion)
 		local scrX, scrY = treeToScreen(group.x, group.y)
+		-- Viewport culling: skip group backgrounds that are off-screen
+		-- Use larger margin since group backgrounds are bigger than nodes
+		local groupMargin = 400 * scale
+		if scrX < viewPort.x - groupMargin or scrX > viewPort.x + viewPort.width + groupMargin or
+		   scrY < viewPort.y - groupMargin or scrY > viewPort.y + viewPort.height + groupMargin then
+			return
+		end
 		if group.ascendancyName then
 			if group.isAscendancyStart then
 				if group.ascendancyName ~= spec.curAscendClassBaseName and (not spec.curSecondaryAscendClass or group.ascendancyName ~= spec.curSecondaryAscendClass.id) then
@@ -528,6 +542,15 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 		connector.c[5], connector.c[6] = treeToScreen(vert[5], vert[6])
 		connector.c[7], connector.c[8] = treeToScreen(vert[7], vert[8])
 
+		-- Viewport culling: skip connector if entirely off-screen
+		local minX = m_min(connector.c[1], connector.c[3], connector.c[5], connector.c[7])
+		local maxX = m_max(connector.c[1], connector.c[3], connector.c[5], connector.c[7])
+		local minY = m_min(connector.c[2], connector.c[4], connector.c[6], connector.c[8])
+		local maxY = m_max(connector.c[2], connector.c[4], connector.c[6], connector.c[8])
+		if maxX < vpLeft or minX > vpRight or maxY < vpTop or minY > vpBottom then
+			return
+		end
+
 		if hoverDep and hoverDep[node1] and hoverDep[node2] then
 			-- Both nodes depend on the node currently being hovered over, so color the line red
 			setConnectorColor(1, 0, 0)
@@ -584,6 +607,35 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 
 	-- Draw the nodes
 	for nodeId, node in pairs(spec.nodes) do
+		-- Convert node position to screen-space (early, for viewport culling)
+		local scrX, scrY = treeToScreen(node.x, node.y)
+
+		-- Viewport culling: skip all processing for off-screen nodes
+		-- Search highlights are preserved (they snap to viewport edges)
+		if scrX < vpLeft or scrX > vpRight or scrY < vpTop or scrY > vpBottom then
+			if self.searchStrResults[nodeId] then
+				SetDrawLayer(nil, 30)
+				local rgbColor = rgbColor or {1, 0, 0}
+				SetDrawColor(rgbColor[1], rgbColor[2], rgbColor[3])
+				local size = 175 * scale / self.zoom ^ 0.4
+				if main.edgeSearchHighlight then
+					local peekaboo_ratio = 1.15
+					local scaled_down_ratio = 0.6667
+					local wide_cull = {viewPort.x - size / peekaboo_ratio, viewPort.x + viewPort.width - size * peekaboo_ratio}
+					local high_cull = {viewPort.y - size / peekaboo_ratio, viewPort.y + viewPort.height - size * peekaboo_ratio}
+					local newX = m_min(m_max(scrX - size, wide_cull[1]), wide_cull[2])
+					local newY = m_min(m_max(scrY - size, high_cull[1]), high_cull[2])
+					if newX ~= scrX - size or newY ~= scrY - size then
+						size = size * scaled_down_ratio
+						newX = newX + size / 2
+						newY = newY + size / 2
+					end
+					DrawImage(self.highlightRing, newX, newY, size * 2, size * 2)
+				end
+			end
+			goto nextNode
+		end
+
 		-- Determine the base and overlay images for this node based on type and state
 		local compareNode = self.compareSpec and self.compareSpec.nodes[nodeId] or nil
 
@@ -690,9 +742,6 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 			end
 		end
 
-		-- Convert node position to screen-space
-		local scrX, scrY = treeToScreen(node.x, node.y)
-	
 		-- Determine color for the base artwork
 		if self.showHeatMap then
 			if not isAlloc and node.type ~= "ClassStart" and node.type ~= "AscendClassStart" then
@@ -866,6 +915,7 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 			self.tooltip.center = true
 			self.tooltip:Draw(m_floor(scrX - size), m_floor(scrY - size), size * 2, size * 2, viewPort)
 		end
+		::nextNode::
 	end
 	
 	-- Draw ring overlays for jewel sockets
@@ -944,6 +994,7 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 			end
 		end
 	end
+
 end
 function PassiveTreeViewClass:DrawImageRotated(handle, x, y, width, height, angle, ...)
 	if main.showAnimations == false then
