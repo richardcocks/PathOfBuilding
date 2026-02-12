@@ -979,7 +979,8 @@ end
 
 function TreeTabClass:SetPowerCalc(powerStat)
 	self.viewer.showHeatMap = true
-	self.build.buildFlag = true
+	-- No need to set buildFlag here: the build hasn't changed, only the stat selection.
+	-- The miscCalculator is still valid and will be reused by PowerBuilder.
 	self.build.calcsTab.powerBuildFlag = true
 	self.build.calcsTab.powerStat = powerStat
 	self.controls.powerReportList:SetReport(powerStat, nil)
