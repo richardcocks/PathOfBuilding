@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PathOfBuilding>
+  <Build level="1" className="Marauder" ascendClassName="None" bandit="None"
+         targetVersion="3_0" mainSocketGroup="1" viewMode="TREE"
+         pantheonMajorGod="None" pantheonMinorGod="None"/>
+  <Import/>
+  <Tree activeSpec="1">
+    <Spec classId="1" ascendClassId="0" treeVersion="3_22" nodes=""/>
+  </Tree>
+  <Items activeItemSet="1" useSecondWeaponSet="false"/>
+  <Skills/>
+  <Config/>
+  <Notes/>
+</PathOfBuilding>
