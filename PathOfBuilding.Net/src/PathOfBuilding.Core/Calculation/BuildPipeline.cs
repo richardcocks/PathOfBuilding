@@ -2,6 +2,7 @@ using PathOfBuilding.Core.Config;
 using PathOfBuilding.Core.Data;
 using PathOfBuilding.Core.Import;
 using PathOfBuilding.Core.Import.Sections;
+using PathOfBuilding.Core.Items;
 using PathOfBuilding.Core.Modifiers;
 
 namespace PathOfBuilding.Core.Calculation;
@@ -46,6 +47,23 @@ public static class BuildPipeline
         var config = ConfigApplicator.Apply(inputs, player.ModDB, enemy.ModDB);
         player.Config = config;
         enemy.Config = config;
+
+        // Parse items
+        var parsedItems = new Dictionary<int, ParsedItem>();
+        foreach (var itemData in build.Items)
+        {
+            if (!string.IsNullOrWhiteSpace(itemData.RawText))
+                parsedItems[itemData.Id] = ItemParser.Parse(itemData);
+        }
+
+        // Resolve equipped items from active item set
+        var equipped = ItemSlotResolver.Resolve(build, parsedItems);
+
+        // Apply item mods to player ModDB
+        ItemModApplicator.Apply(equipped, player.ModDB);
+
+        // Store on actor for downstream access
+        player.EquippedItems = equipped;
 
         return (player, enemy);
     }

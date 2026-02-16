@@ -1,4 +1,5 @@
 using PathOfBuilding.Core.Data;
+using PathOfBuilding.Core.Items;
 
 namespace PathOfBuilding.Core.Modifiers;
 
@@ -41,6 +42,9 @@ public class Actor
     public double ReservedLifePercent { get; set; }
     public double ReservedManaBase { get; set; }
     public double ReservedManaPercent { get; set; }
+
+    /// <summary>Equipped items resolved from active item set, keyed by slot name.</summary>
+    public Dictionary<string, ParsedItem>? EquippedItems { get; set; }
 
     public double GetReservedBase(string pool) => pool == "Life" ? ReservedLifeBase : ReservedManaBase;
     public double GetReservedPercent(string pool) => pool == "Life" ? ReservedLifePercent : ReservedManaPercent;
