@@ -106,6 +106,12 @@ public static class BuildPipeline
         CalcDefence.Defence(player);
         CalcEHP.BuildDefenceEstimations(player);
 
+        // Offence calculation for the main skill
+        if (player.MainSkill != null)
+        {
+            CalcOffence.Offence(player, player.MainSkill);
+        }
+
         return (player, enemy);
     }
 
