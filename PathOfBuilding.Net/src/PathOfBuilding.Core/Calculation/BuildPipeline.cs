@@ -4,6 +4,7 @@ using PathOfBuilding.Core.Import;
 using PathOfBuilding.Core.Import.Sections;
 using PathOfBuilding.Core.Items;
 using PathOfBuilding.Core.Modifiers;
+using PathOfBuilding.Core.Tree;
 
 namespace PathOfBuilding.Core.Calculation;
 
@@ -17,7 +18,7 @@ public static class BuildPipeline
     /// Create configured Actor pair from BuildData without running calculations.
     /// Sets up ModDBs with class stats, level scaling, config-driven mods, etc.
     /// </summary>
-    public static (Actor player, Actor enemy) CreateActors(BuildData build)
+    public static (Actor player, Actor enemy) CreateActors(BuildData build, TreeDataCache? treeCache = null)
     {
         var player = new Actor();
         var enemy = new Actor();
@@ -48,6 +49,9 @@ public static class BuildPipeline
         player.Config = config;
         enemy.Config = config;
 
+        // Apply passive tree mods
+        ApplyTreeMods(build, player.ModDB, treeCache);
+
         // Parse items
         var parsedItems = new Dictionary<int, ParsedItem>();
         foreach (var itemData in build.Items)
@@ -72,9 +76,9 @@ public static class BuildPipeline
     /// Create actors and run the full calculation pipeline.
     /// Returns the actor pair with populated Output dictionaries.
     /// </summary>
-    public static (Actor player, Actor enemy) Calculate(BuildData build)
+    public static (Actor player, Actor enemy) Calculate(BuildData build, TreeDataCache? treeCache = null)
     {
-        var (player, enemy) = CreateActors(build);
+        var (player, enemy) = CreateActors(build, treeCache);
 
         // Run calculation pipeline in order
         CalcPerform.DoActorAttributes(player);
@@ -88,6 +92,30 @@ public static class BuildPipeline
         CalcEHP.BuildDefenceEstimations(player);
 
         return (player, enemy);
+    }
+
+    /// <summary>
+    /// Apply passive tree node mods to the player ModDB.
+    /// </summary>
+    private static void ApplyTreeMods(BuildData build, ModDB playerModDB, TreeDataCache? treeCache)
+    {
+        if (treeCache == null)
+            return;
+
+        // Find the active tree spec
+        TreeSpecData? activeSpec = null;
+        int activeSpecIndex = build.ActiveSpec;
+        if (activeSpecIndex >= 1 && activeSpecIndex <= build.TreeSpecs.Count)
+            activeSpec = build.TreeSpecs[activeSpecIndex - 1];
+
+        if (activeSpec == null || activeSpec.AllocatedNodes.Count == 0)
+            return;
+
+        var treeData = treeCache.GetTreeData(activeSpec.TreeVersion);
+        if (treeData == null)
+            return;
+
+        TreeModApplicator.Apply(treeData, activeSpec, playerModDB);
     }
 
     /// <summary>

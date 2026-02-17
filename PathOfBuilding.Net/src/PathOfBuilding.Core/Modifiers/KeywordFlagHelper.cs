@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace PathOfBuilding.Core.Modifiers;
 
 /// <summary>
@@ -6,7 +8,7 @@ namespace PathOfBuilding.Core.Modifiers;
 /// </summary>
 public static class KeywordFlagHelper
 {
-    private static readonly Dictionary<ulong, bool> Cache = new();
+    private static readonly ConcurrentDictionary<ulong, bool> Cache = new();
 
     /// <summary>
     /// Determines whether a modifier's keyword flags are satisfied by the query's keyword flags.
@@ -22,7 +24,7 @@ public static class KeywordFlagHelper
             return cached;
 
         bool result = ComputeMatch(queryFlags, modFlags);
-        Cache[cacheKey] = result;
+        Cache.TryAdd(cacheKey, result);
         return result;
     }
 
