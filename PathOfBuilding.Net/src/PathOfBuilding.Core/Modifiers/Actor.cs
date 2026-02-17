@@ -1,5 +1,6 @@
 using PathOfBuilding.Core.Data;
 using PathOfBuilding.Core.Items;
+using PathOfBuilding.Core.Skills;
 
 namespace PathOfBuilding.Core.Modifiers;
 
@@ -45,6 +46,12 @@ public class Actor
 
     /// <summary>Equipped items resolved from active item set, keyed by slot name.</summary>
     public Dictionary<string, ParsedItem>? EquippedItems { get; set; }
+
+    /// <summary>All active skills built from socket groups.</summary>
+    public List<ActiveSkill> ActiveSkillList { get; } = new();
+
+    /// <summary>The currently selected main active skill.</summary>
+    public ActiveSkill? MainSkill { get; set; }
 
     public double GetReservedBase(string pool) => pool == "Life" ? ReservedLifeBase : ReservedManaBase;
     public double GetReservedPercent(string pool) => pool == "Life" ? ReservedLifePercent : ReservedManaPercent;

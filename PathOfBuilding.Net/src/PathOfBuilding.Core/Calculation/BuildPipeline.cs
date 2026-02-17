@@ -4,6 +4,7 @@ using PathOfBuilding.Core.Import;
 using PathOfBuilding.Core.Import.Sections;
 using PathOfBuilding.Core.Items;
 using PathOfBuilding.Core.Modifiers;
+using PathOfBuilding.Core.Skills;
 using PathOfBuilding.Core.Tree;
 
 namespace PathOfBuilding.Core.Calculation;
@@ -18,7 +19,8 @@ public static class BuildPipeline
     /// Create configured Actor pair from BuildData without running calculations.
     /// Sets up ModDBs with class stats, level scaling, config-driven mods, etc.
     /// </summary>
-    public static (Actor player, Actor enemy) CreateActors(BuildData build, TreeDataCache? treeCache = null)
+    public static (Actor player, Actor enemy) CreateActors(
+        BuildData build, TreeDataCache? treeCache = null, SkillDataCache? skillCache = null)
     {
         var player = new Actor();
         var enemy = new Actor();
@@ -69,6 +71,18 @@ public static class BuildPipeline
         // Store on actor for downstream access
         player.EquippedItems = equipped;
 
+        // Build active skills from socket groups
+        if (skillCache != null)
+        {
+            ActiveSkillBuilder.BuildFromSocketGroups(build, player, skillCache);
+
+            // Build mod lists for each active skill
+            foreach (var activeSkill in player.ActiveSkillList)
+            {
+                SkillModListBuilder.Build(activeSkill, player.ModDB, skillCache);
+            }
+        }
+
         return (player, enemy);
     }
 
@@ -76,9 +90,10 @@ public static class BuildPipeline
     /// Create actors and run the full calculation pipeline.
     /// Returns the actor pair with populated Output dictionaries.
     /// </summary>
-    public static (Actor player, Actor enemy) Calculate(BuildData build, TreeDataCache? treeCache = null)
+    public static (Actor player, Actor enemy) Calculate(
+        BuildData build, TreeDataCache? treeCache = null, SkillDataCache? skillCache = null)
     {
-        var (player, enemy) = CreateActors(build, treeCache);
+        var (player, enemy) = CreateActors(build, treeCache, skillCache);
 
         // Run calculation pipeline in order
         CalcPerform.DoActorAttributes(player);
